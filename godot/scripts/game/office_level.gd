@@ -108,6 +108,21 @@ func cell(x: int, z: int) -> int:
 	return cells[z * W + x]
 
 
+## 0.20.3: стартовая зона героя — тут при появлении нет врагов (зайти потом могут): его комната (не коридор и не вся
+## крыша) и всё ближе 14 шагов по пути. ds — bfs_dist от start_elev.stand (start_dist()).
+func in_start_zone(i: int, ds: PackedInt32Array) -> bool:
+	if ds[i] >= 0 and ds[i] < 14:
+		return true
+	var st: Vector3 = start_elev.stand
+	var rm: int = room[floori(st.z) * W + floori(st.x)]
+	return not roof and rm >= 0 and room[i] == rm and not rooms[rm].corridor
+
+
+func start_dist() -> PackedInt32Array:
+	var st: Vector3 = start_elev.stand
+	return bfs_dist(floori(st.x), floori(st.z))
+
+
 func walkable(x: int, z: int) -> bool:
 	return inb(x, z) and cells[z * W + x] == FLOOR
 
@@ -805,6 +820,7 @@ func _place_fires(lo: int = 2, hi: int = 4) -> void:
 ## Охраняемая комната: небольшая (склад/кабинет/серверная/кухня/туалет), лучше с одной дверью, не у лифтов.
 ## Маскировка — в дальнем от двери углу; охранник стоит снаружи у двери, лицом от неё.
 func _choose_loot_room() -> bool:
+	var sd := start_dist()
 	var best := {}
 	var best_s := -1e9
 	for r in rooms:
@@ -825,7 +841,7 @@ func _choose_loot_room() -> bool:
 		var dr: Dictionary = doors[0]
 		# снаружи: клетка за дверью с другой стороны
 		var out := Vector2i(dr.door.x - DX[dr.d], dr.door.y - DZ[dr.d])
-		if not walkable(out.x, out.y):
+		if not walkable(out.x, out.y) or in_start_zone(out.y * W + out.x, sd):
 			continue
 		var dist := bfs_dist(dr.in.x, dr.in.y)
 		var far := Vector2i(-1, -1)
@@ -861,6 +877,7 @@ func _fortify() -> void:
 ## Место разговора двоих: кухня (иначе переговорная/опенспейс/кабинет), две соседние свободные клетки ближе к середине.
 func _choose_talk() -> bool:
 	var order := ["kitchen", "meeting", "openspace", "director", "storage"]
+	var sd := start_dist()
 	var cands: Array = rooms.filter(func(r): return not r.corridor and r.id != loot.get("room", -1) and r.area >= 9)
 	var prio := func(r: Dictionary) -> int: return order.find(r.type) if order.has(r.type) else 99
 	cands.sort_custom(func(x, y): return prio.call(x) < prio.call(y))
@@ -871,11 +888,11 @@ func _choose_talk() -> bool:
 		var bd := 1e9
 		for z in range(r.z0, r.z1 + 1):
 			for x in range(r.x0, r.x1 + 1):
-				if not walkable(x, z) or door[z * W + x]: continue
+				if not walkable(x, z) or door[z * W + x] or in_start_zone(z * W + x, sd): continue
 				for k in [1, 2]:
 					var x2: int = x + DX[k]
 					var z2: int = z + DZ[k]
-					if not walkable(x2, z2) or door[z2 * W + x2] or room[z2 * W + x2] != r.id: continue
+					if not walkable(x2, z2) or door[z2 * W + x2] or room[z2 * W + x2] != r.id or in_start_zone(z2 * W + x2, sd): continue
 					var d := Vector2(x + 0.5 - cx, z + 0.5 - cz).length() + rng.randf()
 					if d < bd:
 						bd = d
@@ -893,12 +910,13 @@ func _choose_talk() -> bool:
 func _place_radio() -> bool:
 	var cands: Array = rooms.filter(func(r): return not r.corridor and r.id != loot.get("room", -1) and r.id != talk.get("room", -1))
 	cands.shuffle()
+	var sd := start_dist()
 	for r in cands:
 		for _try in 30:
 			var side := rng.randi_range(0, 3)
 			var e := _edge(r, side)
 			var c: Vector2i = e[rng.randi_range(0, e.size() - 1)]
-			if not walkable(c.x, c.y) or door[c.y * W + c.x] or not _against_wall(c, side):
+			if not walkable(c.x, c.y) or door[c.y * W + c.x] or not _against_wall(c, side) or in_start_zone(c.y * W + c.x, sd):
 				continue
 			var inx: int = c.x - DX[side]
 			var inz: int = c.y - DZ[side]
@@ -947,7 +965,7 @@ func _choose_sides() -> bool:
 	var da := bfs_dist(a % W, a / W)
 	var b := -1
 	for i in W * H:
-		if ds[i] >= 14 and da[i] >= 0 and cells[i] == FLOOR and not door[i] and (b < 0 or da[i] > da[b]):
+		if ds[i] >= 14 and not in_start_zone(i, ds) and da[i] >= 0 and cells[i] == FLOOR and not door[i] and (b < 0 or da[i] > da[b]):
 			b = i
 	if b < 0 or da[b] < 18:
 		return false

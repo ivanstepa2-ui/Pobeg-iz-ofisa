@@ -407,7 +407,7 @@ func weapon_stowed() -> bool:
 ## Спокойных зомби отряд зачистки не «пугается» — их выслеживают и режут со спины (_hunt_scan).
 func _candidates() -> Array:
 	# 0.15: лояльные офисники героя не высматривают
-	var out: Array = [game.player] if is_foe(game.player) else []
+	var out: Array = [game.player] if is_foe(game.player) and game.arrive_grace <= 0.0 else []
 	for e: Enemy in game.enemies:
 		if e.faction == faction or e.is_dead() or e == stalk:
 			continue

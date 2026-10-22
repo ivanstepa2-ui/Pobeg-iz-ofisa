@@ -1163,32 +1163,75 @@ func _frames(n: int) -> void:
 		await game.get_tree().process_frame
 
 
-## 0.15.1: в стартовой комнате героя (или в 16 шагах от старта) при появлении — не больше одного зомби, и не толстяк.
+## 0.20.3: в стартовой зоне героя (его комната / 14 шагов) при появлении врагов нет — на всех типах этажей;
+## «только приехал» — первые 3 с зомби в 3 м перед героем его не замечает, потом замечает;
+## «ЕЩЁ РАЗ» после смерти — с этажа, выбранного в начале, «НАЧАТЬ СМЕНУ» — с 1-го.
 func _start_room_test() -> bool:
+	var res := {}
 	var worst := 0
-	var fat := 0
 	var loads := 0
-	for n in [1, 3, 5, 9, 12, 16]:
-		for _t in 3:
-			game._load_floor(n, false)
+	var plan := [[1, ""], [3, ""], [5, ""], [9, ""], [12, ""], [16, ""], [22, ""], [27, ""],
+		[5, "lair"], [10, "fort"], [10, "battle"], [30, "roof"]]
+	for c in plan:
+		for _t in 2:
+			game._load_floor(c[0], false, c[1])
 			loads += 1
 			var L: OfficeLevel = game.L
-			var sp: Vector3 = L.start_elev.stand
-			var dist := L.bfs_dist(floori(sp.x), floori(sp.z))
-			var rm: int = L.room[floori(sp.z) * L.W + floori(sp.x)]
+			var sd := L.start_dist()
 			var near := 0
 			for e: Enemy in game.enemies:
-				if e is Human: continue
-				var ci := floori(e.pz()) * L.W + floori(e.px())
-				if (rm >= 0 and L.room[ci] == rm) or (dist[ci] >= 0 and dist[ci] < 16):
+				if L.in_start_zone(floori(e.pz()) * L.W + floori(e.px()), sd):
 					near += 1
-					if e.type == "fat": fat += 1
 			worst = maxi(worst, near)
 			await game.get_tree().process_frame
+	res["%d этажей всех типов: врагов у старта %d" % [loads, worst]] = worst == 0
+	# «только приехал»
+	game._load_floor(3, false)
+	await _frames(2)
+	var p: Player = game.player
+	_clear()
+	_open_spot(p)
+	p.dead = false
+	p.invuln = 99.0
+	p.hp = 100.0
+	p.crouch = false
+	game.autotest = false
+	game.state = "play"
+	game.arrive_grace = game.ARRIVE_GRACE
+	var z := _put("zombie", 3.0, false)
+	var early := false
+	var seen_t := -1.0
+	for i in 200:
+		await _frames(1)
+		if z.state == Enemy.S.LOOK:
+			z.angle = z.angle_to_point(p.px(), p.pz())
+			z.rotation.y = z.angle
+			z.look_base = z.angle
+			z.model.head.rotation.y = 0.0
+		if i < 80 and (z.is_hostile() or z.susp > 0.12):
+			early = true
+		if z.is_hostile():
+			seen_t = (i + 1) / 30.0
+			break
+	res["только приехал: зомби в 3 м не замечает 2,7 с"] = not early
+	res["потом — замечает (%.1f с)" % seen_t] = seen_t > 3.0 and seen_t < 6.0
+	_clear()
+	# «ЕЩЁ РАЗ» — с выбранного этажа
+	game.start_run(25)
+	await _frames(2)
+	game.floor_num = 28
+	game.on_button("retry", true)
+	await _frames(2)
+	res["ЕЩЁ РАЗ — снова с 25-го"] = game.floor_num == 25 and int(game.stats.from) == 25
+	game.on_button("start", true)
+	await _frames(2)
+	res["НАЧАТЬ СМЕНУ — с 1-го"] = game.floor_num == 1 and game.run_from == 1
 	game.state = "intro"
-	var ok := worst <= 1 and fat == 0
-	print("[itemtest] %-14s %-18s %s" % ["start_0.15.1", "верно" if ok else "НЕВЕРНО",
-		{"%d этажей: у старта не больше 1 зомби (макс %d), толстяков %d" % [loads, worst, fat]: ok}])
+	var ok := true
+	for k in res:
+		if not res[k]:
+			ok = false
+	print("[itemtest] %-14s %-18s %s" % ["start_0.20.3", "верно" if ok else "НЕВЕРНО", res])
 	return ok
 
 

@@ -40,6 +40,11 @@ var squads: Array = []      # отряды людей: {members, anchor, mode, t
 var waves: Array = []       # когда приедут люди: {hack, time, size, done}
 var floor_t := 0.0
 var arrive_t := -1.0        # анимация дверей лифта при приезде людей
+## 0.20.3: только приехал на этаж (вступление + ARRIVE_GRACE с начала игры) — враги героя не видят и не слышат.
+## Тихо, без подсказок: игрок об этом знать не должен.
+const ARRIVE_GRACE := 3.0
+var arrive_grace := 0.0
+var grace_off := false   # тесты-сцены
 var spotted_by_humans := false  # на этом этаже люди тебя заметили
 var human_kills := 0            # сколько зомби люди вырезали со спины (для --aitest)
 var click_waves: Array = []     # волны щелчков щелкунов для HUD: {pos, t}
@@ -117,6 +122,8 @@ var fx: Fx
 var sfx: Sfx
 var hud: Hud
 var stats := {"kills": 0, "knockouts": 0, "hacked": 0, "floors": 0}
+var run_from := 1       # 0.20.3: с какого этажа (и типа) начат забег — «ЕЩЁ РАЗ» после смерти начинает оттуда же
+var run_kind := ""
 var password: Array = []
 var hacked := 0
 var quote := ""
@@ -155,6 +162,10 @@ func _ready() -> void:
 	hud.game = self
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
+	# 0.20.3: в тестах-сценах (не бот) «только приехал» выключено — сцены ставят врагов сразу после загрузки этажа
+	for a in ["--itemtest", "--perftest", "--npcwatch", "--aitest", "--balancetest", "--posetest"]:
+		if a in OS.get_cmdline_user_args():
+			grace_off = true
 	if "--itemtest" in OS.get_cmdline_user_args():
 		start_run()
 		var t: Node = load("res://scripts/tests/item_test.gd").new()
@@ -368,6 +379,8 @@ func start_run(from: int = 1, kind: String = "") -> void:
 	if from >= FINAL_FLOOR:
 		kind = ""   # 30-й — всегда крыша
 	floor_num = from
+	run_from = from
+	run_kind = kind
 	stats = {"kills": 0, "knockouts": 0, "hacked": 0, "floors": 0, "time": 0.0, "alerts": 0, "from": from}
 	player = null
 	spotted_by_humans = false
@@ -477,6 +490,7 @@ func _load_floor(n: int, demo: bool, kind: String = "") -> void:
 	if not demo:
 		state = "intro"
 		state_t = 0.0
+		arrive_grace = 0.0 if grace_off else ARRIVE_GRACE   # идёт только в игре: вступление + 3 с
 	var deep := minf(1.0, (n - 1) / 12.0)
 	env.fog_density = 0.04 + deep * 0.03
 	if floor_kind == "roof":
@@ -497,10 +511,7 @@ func _spawn_enemies(n: int) -> void:
 	else: w = {"zombie": 40, "woman": 30, "fat": 30}
 	var sp: Vector3 = L.start_elev.stand
 	var dist := L.bfs_dist(floori(sp.x), floori(sp.z))
-	# у героя в стартовой комнате (или в 16 шагах, если старт в коридоре) — не больше одного зомби, и не толстяк
-	var start_rm: int = L.room[floori(sp.z) * L.W + floori(sp.x)]
-	var near_start := func(ci: int) -> bool: return (start_rm >= 0 and L.room[ci] == start_rm) or dist[ci] < 16
-	var near_n := 0
+	# 0.20.3: в стартовой комнате героя (и в 14 шагах) врагов нет — зайти могут потом
 	var used: Array = []
 	var hack_cells := {}
 	for pc in L.pcs:
@@ -512,10 +523,7 @@ func _spawn_enemies(n: int) -> void:
 	for s in spots:
 		if workers <= 0: break
 		var ci := floori(s.z) * L.W + floori(s.x)
-		if hack_cells.has(ci) or dist[ci] < 10: continue
-		if near_start.call(ci):
-			if near_n >= 1: continue
-			near_n += 1
+		if hack_cells.has(ci) or dist[ci] < 10 or L.in_start_zone(ci, dist): continue
 		var kind := "zombie" if rng.randf() < 0.65 else "woman"
 		_add_enemy(kind, Vector3(s.x, 0, s.z), s.ang, true)
 		used.append(Vector2(s.x, s.z))
@@ -527,18 +535,13 @@ func _spawn_enemies(n: int) -> void:
 		var x := rng.randi_range(1, L.W - 2)
 		var z := rng.randi_range(1, L.H - 2)
 		var ci := z * L.W + x
-		if not L.walkable(x, z) or dist[ci] < 12: continue
-		var near: bool = near_start.call(ci)
-		if near and near_n >= 1: continue
+		if not L.walkable(x, z) or dist[ci] < 12 or L.in_start_zone(ci, dist): continue
 		var pos := Vector2(x + 0.5, z + 0.5)
 		var close := false
 		for u in used:
 			if pos.distance_to(u) < 3.0: close = true
 		if close: continue
 		var kind := _weighted(w)
-		if near:
-			near_n += 1
-			if kind == "fat": kind = "zombie"
 		_add_enemy(kind, Vector3(pos.x, 0, pos.y), rng.randf() * TAU, false)
 		used.append(pos)
 		count -= 1
@@ -554,13 +557,12 @@ func _spawn_clickers(n: int, dist: PackedInt32Array) -> void:
 	var placed: Array = []
 	var sp: Vector3 = L.start_elev.stand
 	var ex: Vector3 = L.exit_elev.stand
-	var start_rm: int = L.room[floori(sp.z) * L.W + floori(sp.x)]   # 0.15.1: не в стартовой комнате героя
 	for _try in 3000:
 		if placed.size() >= want:
 			break
 		var x := rng.randi_range(1, L.W - 2)
 		var z := rng.randi_range(1, L.H - 2)
-		if not L.walkable(x, z) or dist[z * L.W + x] < 15 or (start_rm >= 0 and L.room[z * L.W + x] == start_rm):
+		if not L.walkable(x, z) or dist[z * L.W + x] < 15 or L.in_start_zone(z * L.W + x, dist):
 			continue
 		var p := Vector2(x + 0.5, z + 0.5)
 		if p.distance_to(Vector2(sp.x, sp.z)) < 15.0 or p.distance_to(Vector2(ex.x, ex.z)) < 5.0:
@@ -757,6 +759,7 @@ func _update_world(dt: float, with_player: bool) -> void:
 
 func _update_play(dt: float) -> void:
 	stats.time = float(stats.get("time", 0.0)) + dt
+	arrive_grace = maxf(0.0, arrive_grace - dt)
 	var mv := _read_move()
 	if autotest:
 		mv = _autopilot(dt)
@@ -893,7 +896,7 @@ func shake(amount: float) -> void:
 func emit_noise(pos: Vector3, r: float, kind: String, ring: bool = false, extra: Vector3 = Vector3.ZERO, source: Node = null) -> void:
 	noise_from_player = source == null   # без источника шумят только герой и его броски
 	for e: Enemy in enemies:
-		if e != source:
+		if e != source and not (noise_from_player and arrive_grace > 0.0):
 			e.hear(pos, r, kind, extra)
 	noise_from_player = false
 	match kind:
@@ -1631,7 +1634,7 @@ func _spawn_lair(n: int) -> void:
 				var x := rng.randi_range(1, L.W - 2)
 				var z := rng.randi_range(1, L.H - 2)
 				var ci := z * L.W + x
-				if not L.walkable(x, z) or dist[ci] < 18 or L.door[ci]:
+				if not L.walkable(x, z) or dist[ci] < 18 or L.door[ci] or L.in_start_zone(ci, dist):
 					continue
 				var p := Vector2(x + 0.5, z + 0.5)
 				var close := false
@@ -1719,7 +1722,7 @@ func _spawn_fort(n: int) -> void:
 				var x := rng.randi_range(1, L.W - 2)
 				var z := rng.randi_range(1, L.H - 2)
 				var ci := z * L.W + x
-				if not L.walkable(x, z) or dist[ci] < 10 or L.door[ci]:
+				if not L.walkable(x, z) or dist[ci] < 10 or L.door[ci] or L.in_start_zone(ci, dist):
 					continue
 				var pp := Vector2(x + 0.5, z + 0.5)
 				var close := false
@@ -1753,6 +1756,7 @@ func _spawn_fort(n: int) -> void:
 const BATTLE_GUNS := ["uzi", "rifle", "revolver", "nailgun", "crossbow"]
 
 func _spawn_battle(n: int) -> void:
+	var sd := L.start_dist()
 	var sides: Array = L.sides.duplicate()
 	if rng.randf() < 0.5:
 		sides.reverse()
@@ -1770,7 +1774,7 @@ func _spawn_battle(n: int) -> void:
 			var pos := base
 			for _try in 60:
 				var c := L.nearest_walkable(floori(base.x) + rng.randi_range(-4, 4), floori(base.z) + rng.randi_range(-4, 4), 2)
-				if c.x < 0: continue
+				if c.x < 0 or L.in_start_zone(c.y * L.W + c.x, sd): continue
 				var p := Vector3(c.x + 0.5, 0, c.y + 0.5)
 				var close := false
 				for u in used:
@@ -2660,7 +2664,7 @@ func on_button(btn: String, pressed: bool) -> void:
 		"title":
 			_go_title()
 		"retry":
-			start_run()
+			start_run(run_from, run_kind)   # 0.20.3: после смерти — с того же этажа, что выбрал в начале
 		"sound":
 			sfx.set_muted(not sfx.muted)
 			sfx_muted_saved = sfx.muted

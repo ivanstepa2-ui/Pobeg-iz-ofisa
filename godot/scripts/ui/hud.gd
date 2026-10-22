@@ -723,7 +723,8 @@ func _draw_gameover(ci: CanvasItem) -> void:
 	var s: Dictionary = game.stats
 	text(ci, Vector2(W * 0.5, 192), "Этаж: %d   Взломано ПК: %d   Устранено: %d   Нокаутов: %d" % [game.floor_num, s.hacked, s.kills, s.knockouts], 16, C_YEL, HORIZONTAL_ALIGNMENT_CENTER)
 	text(ci, Vector2(W * 0.5, 218), "Рекорд: %d эт." % game.best_floor, 15, C_DIM, HORIZONTAL_ALIGNMENT_CENTER)
-	_menu_button(ci, Rect2(W * 0.5 - 130, 250, 260, 48), "retry", "ЕЩЁ РАЗ", C_GREEN)
+	var again := "ЕЩЁ РАЗ" if game.run_from <= 1 else "ЕЩЁ РАЗ · С %d-ГО" % game.run_from
+	_menu_button(ci, Rect2(W * 0.5 - 130, 250, 260, 48), "retry", again, C_GREEN)
 	_menu_button(ci, Rect2(W * 0.5 - 130, 310, 260, 48), "title", "В МЕНЮ", C_DIM)
 
 
@@ -861,5 +862,5 @@ func _draw_victory(ci: CanvasItem) -> void:
 	text(ci, Vector2(W * 0.5, 202), "Устранено: %d   Нокаутов: %d   Раз тебя замечали: %d" % [s.kills, s.knockouts, int(s.get("alerts", 0))], 16, Color(C_YEL, a), HORIZONTAL_ALIGNMENT_CENTER)
 	text(ci, Vector2(W * 0.5, 228), "Игра пройдена: %d раз" % game.beaten, 15, Color(C_DIM, a), HORIZONTAL_ALIGNMENT_CENTER)
 	if a >= 1.0:
-		_menu_button(ci, Rect2(W * 0.5 - 130, 260, 260, 48), "retry", "НОВАЯ ИГРА", C_GREEN)
+		_menu_button(ci, Rect2(W * 0.5 - 130, 260, 260, 48), "start", "НОВАЯ ИГРА", C_GREEN)   # с 1-го этажа
 		_menu_button(ci, Rect2(W * 0.5 - 130, 320, 260, 48), "title", "В МЕНЮ", C_DIM)
