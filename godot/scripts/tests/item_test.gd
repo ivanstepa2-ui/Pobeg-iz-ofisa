@@ -101,6 +101,7 @@ func run(g: Node) -> void:
 	ok = await _roof_test() and ok
 	ok = await _witness_test() and ok
 	ok = await _escape_test() and ok
+	ok = await _reward_test() and ok
 	print("[itemtest] ИТОГ: ", "OK" if ok else "ЕСТЬ ПРОБЛЕМЫ")
 	game.get_tree().quit()
 
@@ -1767,4 +1768,16 @@ func _escape_test() -> bool:
 		if not res[k]:
 			ok = false
 	print("[itemtest] %-14s %-18s %s" % ["escape_0.20", "верно" if ok else "НЕВЕРНО", res])
+	return ok
+
+
+## 0.20.2: за взлом ПК бутылки больше не выпадают (только стартовый набор и лут с людей).
+func _reward_test() -> bool:
+	var counts := {}
+	for _i in 3000:
+		var rw: Dictionary = Items.roll_reward(game.rng, 1.0 if _i % 2 == 0 else 0.3, {} if _i % 3 == 0 else {"brick": 2})
+		counts[rw.id] = counts.get(rw.id, 0) + 1
+	var ok: bool = not counts.has("bottle") and counts.has("alarm") and counts.has("brick")
+	print("[itemtest] %-14s %-18s 3000 наград: бутылок %d, будильников %d, кирпичей %d" % ["reward_0.20.2", "верно" if ok else "НЕВЕРНО",
+		counts.get("bottle", 0), counts.get("alarm", 0), counts.get("brick", 0)])
 	return ok

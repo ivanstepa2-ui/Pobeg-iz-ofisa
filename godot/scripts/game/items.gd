@@ -126,7 +126,7 @@ static func roll_reward(rng: RandomNumberGenerator, hp_ratio: float, inv: Dictio
 	var w := {
 		"pistol": 12.0, "shotgun": 7.0, "silenced": 3.0,
 		"coffee": 7.0, "medkit": 4.2, "energy": 4.2,   # лечение реже (0.6: ×0.7)
-		"bottle": 14.0, "alarm": 8.0,
+		"alarm": 8.0,   # 0.20.2: бутылок за ПК нет (только старт и лут с людей)
 		"brick": 12.0, "extinguisher": 6.0,
 		"shuriken": 10.0, "grenade": 6.0,
 		"pipe": 9.0,
@@ -136,11 +136,11 @@ static func roll_reward(rng: RandomNumberGenerator, hp_ratio: float, inv: Dictio
 	var throwables := 0
 	for k in THROWN: throwables += inv.get(k, 0)
 	if throwables < 2:
-		for k in ["bottle", "brick", "shuriken"]: w[k] *= 1.8
+		for k in ["alarm", "brick", "shuriken"]: w[k] *= 1.8
 	var total := 0.0
 	for k in w: total += w[k]
 	var r := rng.randf() * total
-	var id: String = "bottle"
+	var id: String = "brick"
 	for k in w:
 		r -= w[k]
 		if r <= 0.0:
@@ -148,5 +148,4 @@ static func roll_reward(rng: RandomNumberGenerator, hp_ratio: float, inv: Dictio
 			break
 	var amount: int = DEFS[id].amount
 	if id == "shuriken" and rng.randf() < 0.4: amount += 1
-	if id == "bottle" and rng.randf() < 0.3: amount += 1
 	return {"id": id, "amount": amount, "flavor": FLAVOR[rng.randi_range(0, FLAVOR.size() - 1)]}
