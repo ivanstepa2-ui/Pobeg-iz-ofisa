@@ -1729,6 +1729,7 @@ func _escape_test() -> bool:
 		game._update_world(DT, false)
 	var h1: int = humans.call()
 	res["после 3-го взлома спустились %d" % (h1 - h0)] = h1 - h0 >= 2 and h1 - h0 <= 3
+	res["следующая — через 3 мин (%.0f с)" % game.esc_t] = game.esc_t > 160.0 and game.esc_t <= 180.0   # 0.20.1
 	game.esc_t = 0.01
 	game._update_world(DT, false)
 	var h2: int = humans.call()
