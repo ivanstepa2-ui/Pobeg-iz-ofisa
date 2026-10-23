@@ -10,6 +10,7 @@ const C_RED := Color(1.0, 0.3, 0.25)
 const C_YEL := Color(1.0, 0.85, 0.3)
 const C_PANEL := Color(0.02, 0.05, 0.03, 0.78)
 const C_CLICK := Color(0.78, 0.45, 1.0)   # щелкун и его щелчки
+const C_VENT := Color(0.45, 0.85, 1.0)    # 0.21: вентиляция
 
 var game: Node
 var move_vec := Vector2.ZERO
@@ -540,8 +541,13 @@ func _draw_hud(ci: CanvasItem) -> void:
 		if game.ctx.kind == "hatch":
 			lbl = "ЗАКРЫТЬ"   # 0.20: заблокировать люк пожарной лестницы
 			ccol = C_YEL
+		if game.ctx.kind == "vent":
+			lbl = "ВЕНТ." if game.ctx.ok else "ВЕНТ. ✕"   # 0.21: залезть в вентиляцию (только в тревогу)
+			ccol = C_VENT if game.ctx.ok else C_DIM
 		_round_button(ci, "ctx", lbl, ccol, game.ctx_held)
-		if game.ctx.kind == "hatch" and game.hatch_hold > 0.0:
+		if game.ctx.kind == "vent":
+			text(ci, buttons.ctx.pos + Vector2(0, 58), "залезть" if game.ctx.ok else "в тревогу", 12, C_DIM, HORIZONTAL_ALIGNMENT_CENTER)
+		elif game.ctx.kind == "hatch" and game.hatch_hold > 0.0:
 			text(ci, buttons.ctx.pos + Vector2(0, 58), "%d%%" % int(100.0 * game.hatch_hold / game.HATCH_TIME), 12, C_YEL, HORIZONTAL_ALIGNMENT_CENTER)
 		else:
 			text(ci, buttons.ctx.pos + Vector2(0, 58), "держи 3 с" if game.ctx.kind == "hatch" else "держи", 12, C_DIM, HORIZONTAL_ALIGNMENT_CENTER)
@@ -777,6 +783,15 @@ func draw_radar(ci: Control) -> void:
 		var qe := Vector2(es.plane.x, es.plane.z) - p
 		if qe.length() < 22.0:
 			ci.draw_rect(Rect2(qe - Vector2(0.9, 0.9), Vector2(1.8, 1.8)), Color(0.55, 0.55, 0.55) if es.locked else Color(1.0, 0.25, 0.2, 0.6 + 0.4 * sin(tsec * 4.0)))
+	# 0.21: вентиляция — голубые квадратики у стены, пара соединена тонкой линией; использована — серые
+	for v in L.vents:
+		var qa := Vector2(v.a.plane.x, v.a.plane.z) - p
+		var qv := Vector2(v.b.plane.x, v.b.plane.z) - p
+		if qa.length() < 22.0 and qv.length() < 22.0:
+			ci.draw_line(qa, qv, Color(C_VENT if not v.used else C_DIM, 0.25), 0.3)
+		for q in [qa, qv]:
+			if q.length() < 22.0:
+				ci.draw_rect(Rect2(q - Vector2(0.7, 0.7), Vector2(1.4, 1.4)), Color(C_VENT, 0.9) if not v.used else Color(C_DIM, 0.6))
 	# 0.19.1: пакеты на ноги (укреплённый офис), пока не подобраны — розовый квадрат
 	for pk in game.pickups:
 		if pk.id == "bags":

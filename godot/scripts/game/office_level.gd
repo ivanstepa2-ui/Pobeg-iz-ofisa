@@ -63,6 +63,8 @@ var fort := false          # 0.17: укреплённый офис выжива�
 var battle := false        # 0.18: поле битвы — развороченный офис, без зомби и взлома; офисники против бандитов
 var roof := false          # 0.19: крыша (30-й этаж, финал) — открытая площадка за парапетом, вертолётная площадка
 var helipad := Vector3.ZERO   # 0.19: центр вертолётной площадки
+var dead_before := 0        # 0.21: тупиков до _add_loops (замер)
+var vents: Array = []      # 0.21: вентиляция — пары решёток {a, b, len}; концы {x, z, d, normal, plane, stand, room}
 var escapes: Array = []    # 0.20: пожарные лестницы (этажи 20–29) {x, z, d, normal, plane, stand, room}
 var sides := []            # 0.18: где стоят стороны [{pos: Vector3}, {pos}] — у разных концов этажа
 var ammo_pos := Vector3.ZERO   # 0.18: ящик с патронами — между сторонами
@@ -164,10 +166,13 @@ func _try(n: int, seed_v: int) -> bool:
 	_make_rooms(leaves)
 	if rooms.size() < 6:
 		return false
+	dead_before = dead_ends()   # для тестов: сколько тупиков дал бы старый генератор
+	_add_loops()
 	if not _place_elevators():
 		return false
 	if n >= 20 and n < 30 and not (lair or fort or battle):
 		_place_escapes(rng.randi_range(1, 2))   # 0.20: до мебели — проход перед люком свободен
+	_place_vents(1)   # 0.21: одна пара на этаж; до мебели — перед решёткой свободно
 	for r in rooms:
 		_furnish(r)
 	if lair:
@@ -391,6 +396,187 @@ func _make_rooms(leaves: Array) -> void:
 					if inb(nx, nz) and room[nz * W + nx] >= 0 and not door[nz * W + nx]:
 						room[i] = room[nz * W + nx]
 						break
+
+
+## 0.21: больше выходов. BSP соединяет половины этажа 1–2 дверями — получается «дерево», комнаты-тупики. Соседние
+## комнаты с общей стеной, но без двери, соединяем: тупик (один выход) — почти всегда, остальные — в половине случаев;
+## между двумя комнатами (не коридором) часто — широкий проём в 2–3 клетки, комнаты «перетекают» одна в другую.
+func _add_loops() -> void:
+	var cand := {}   # пара комнат -> клетки стены, через которые можно прорубить проход
+	var links := room_links()
+	for z in range(1, H - 1):
+		for x in range(1, W - 1):
+			var i := z * W + x
+			if cells[i] != WALL:
+				continue
+			for ax in 2:
+				var ox := 1 if ax == 0 else 0
+				var oz := 1 - ox
+				var a := (z - oz) * W + (x - ox)
+				var b := (z + oz) * W + (x + ox)
+				if cells[a] != FLOOR or cells[b] != FLOOR or door[a] or door[b]:
+					continue
+				var ra: int = room[a]
+				var rb: int = room[b]
+				if ra < 0 or rb < 0 or ra == rb:
+					continue
+				# посреди прямой стены: вдоль неё — тоже стена (не угол, не рядом с дверью)
+				if cells[(z - ox) * W + (x - oz)] != WALL or cells[(z + ox) * W + (x + oz)] != WALL:
+					continue
+				var k := mini(ra, rb) * 1000 + maxi(ra, rb)
+				if not cand.has(k):
+					cand[k] = []
+				cand[k].append({"x": x, "z": z, "ax": ax})
+	var keys := cand.keys()
+	keys.shuffle()
+	for k in keys:
+		var ra: int = k / 1000
+		var rb: int = k % 1000
+		var cells_k: Array = cand[k]
+		cells_k.sort_custom(func(p, q): return p.x + p.z < q.x + q.z)
+		var both_rooms: bool = not rooms[ra].corridor and not rooms[rb].corridor
+		var linked: bool = links[ra].has(rb)
+		var dead: bool = (not rooms[ra].corridor and links[ra].size() <= 1) or (not rooms[rb].corridor and links[rb].size() <= 1)
+		var p := 0.92 if dead else 0.5
+		if linked:
+			p = 0.3 if both_rooms and cells_k.size() >= 8 else 0.0   # уже есть дверь — иногда второй, широкий проём
+		if rng.randf() >= p:
+			continue
+		var wd := 1
+		var roll := rng.randf()
+		if both_rooms and cells_k.size() >= 6:
+			wd = 3 if roll < 0.3 else (2 if roll < 0.65 else 1)
+		elif cells_k.size() >= 4 and roll < 0.3:
+			wd = 2
+		if linked:
+			wd = maxi(wd, 2)
+		# подряд идущие клетки с отступом от краёв; рядом (2 клетки) — не дверь
+		for _t in 8:
+			var s := rng.randi_range(1, maxi(1, cells_k.size() - 1 - wd))
+			if s + wd > cells_k.size():
+				continue
+			var run: Array = cells_k.slice(s, s + wd)
+			var ok := true
+			for j in run.size():
+				var c: Dictionary = run[j]
+				if j > 0 and absi(c.x - run[j - 1].x) + absi(c.z - run[j - 1].z) != 1:
+					ok = false
+			var c0: Dictionary = run[0]
+			var c1: Dictionary = run[run.size() - 1]
+			var ux: int = c0.ax   # направление вдоль стены
+			var uz: int = 1 - c0.ax
+			for dd in [-2, -1]:
+				if inb(c0.x + ux * dd, c0.z + uz * dd) and door[(c0.z + uz * dd) * W + c0.x + ux * dd]: ok = false
+			for dd in [1, 2]:
+				if inb(c1.x + ux * dd, c1.z + uz * dd) and door[(c1.z + uz * dd) * W + c1.x + ux * dd]: ok = false
+			if not ok:
+				continue
+			for c in run:
+				_set_door(c.x, c.z)
+				room[c.z * W + c.x] = ra
+			links[ra][rb] = true
+			links[rb][ra] = true
+			break
+
+
+## Какие комнаты соединены дверью напрямую: {id: {сосед: true}}.
+func room_links() -> Dictionary:
+	var links := {}
+	for r in rooms:
+		links[r.id] = {}
+	for z in range(1, H - 1):
+		for x in range(1, W - 1):
+			if not door[z * W + x]:
+				continue
+			for ax in 2:
+				var ox := 1 if ax == 0 else 0
+				var oz := 1 - ox
+				var a := (z - oz) * W + (x - ox)
+				var b := (z + oz) * W + (x + ox)
+				if cells[a] != FLOOR or cells[b] != FLOOR:
+					continue
+				var ra: int = room[a]
+				var rb: int = room[b]
+				if ra >= 0 and rb >= 0 and ra != rb:
+					links[ra][rb] = true
+					links[rb][ra] = true
+	return links
+
+
+## Комнаты-тупики: не коридор и одна дверь наружу.
+func dead_ends() -> int:
+	var links := room_links()
+	var n := 0
+	for r in rooms:
+		if not r.corridor and links[r.id].size() <= 1:
+			n += 1
+	return n
+
+
+# ---------------------------------------------------------------- 0.21: вентиляция
+## Пары решёток у пола в стенах разных комнат, между ними 14–45 шагов по полу. Залез — вылез у другой решётки;
+## враги за тобой не лезут. Решётки не ближе 6 м друг к другу, клетка перед решёткой — без мебели.
+func _place_vents(count: int) -> void:
+	var cands: Array = []
+	for z in range(1, H - 1):
+		for x in range(1, W - 1):
+			if cells[z * W + x] != WALL or elev[z * W + x] != 0:
+				continue
+			for d in 4:
+				var fx: int = x + DX[d]
+				var fz: int = z + DZ[d]
+				if not walkable(fx, fz) or door[fz * W + fx] or reserved[fz * W + fx]:
+					continue
+				var sx: int = DX[(d + 1) % 4]
+				var sz: int = DZ[(d + 1) % 4]
+				if cell(x + sx, z + sz) != WALL or cell(x - sx, z - sz) != WALL:
+					continue
+				if room[fz * W + fx] < 0 or rooms[room[fz * W + fx]].corridor and rng.randf() < 0.6:
+					continue   # лучше в комнатах, в коридорах реже
+				cands.append({"x": x, "z": z, "d": d, "fx": fx, "fz": fz})
+	cands.shuffle()
+	var ends: Array = []
+	for c in cands:
+		if vents.size() >= count:
+			break
+		if not _vent_far(c, ends):
+			continue
+		var dist := bfs_dist(c.fx, c.fz)
+		var best := {}
+		var bs := -1.0
+		for o in cands:
+			var dd: int = dist[o.fz * W + o.fx]
+			if dd < 14 or dd > 45 or room[o.fz * W + o.fx] == room[c.fz * W + c.fx] or not _vent_far(o, ends + [c]):
+				continue
+			var s := float(dd) + rng.randf() * 12.0
+			if s > bs:
+				bs = s
+				best = o
+		if best.is_empty():
+			continue
+		var ea := _vent_end(c)
+		var eb := _vent_end(best)
+		ends.append(c)
+		ends.append(best)
+		vents.append({"a": ea, "b": eb, "len": Vector2(ea.stand.x - eb.stand.x, ea.stand.z - eb.stand.z).length(), "used": false})
+
+
+func _vent_far(c: Dictionary, ends: Array) -> bool:
+	for e in ends:
+		if Vector2(c.x - e.x, c.z - e.z).length() < 6.0:
+			return false
+	for es in escapes:
+		if Vector2(c.x - es.x, c.z - es.z).length() < 3.0:
+			return false
+	return true
+
+
+func _vent_end(c: Dictionary) -> Dictionary:
+	reserved[c.fz * W + c.fx] = 1
+	var nrm := Vector3(DX[c.d], 0, DZ[c.d])
+	var plane := Vector3(c.x + 0.5, 0, c.z + 0.5) + nrm * 0.5
+	return {"x": c.x, "z": c.z, "d": c.d, "normal": nrm, "plane": plane, "stand": plane + nrm * 0.75,
+		"room": room[c.fz * W + c.fx]}
 
 
 func _weighted(w: Dictionary) -> String:

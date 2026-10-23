@@ -1610,3 +1610,57 @@ func run_readme(g: Node, dir: String) -> void:
 	await shot.call("roof", 5)
 	print("[readme] готово")
 	game.get_tree().quit()
+
+
+## 0.21: вентиляция — за героем гонится зомби, «ВЕНТ.» у решётки, ползёт (камера едет вдоль трубы), вылез у другой.
+## anim_vent.png + pose_vent_<что>.png.
+func run_vent(g: Node, dir: String) -> void:
+	game = g
+	game.rng.seed = 5
+	game._load_floor(6, false, "normal")
+	await _frames(20)
+	game.state = "play"
+	game.waves = []
+	var p: Player = game.player
+	p.hp = 99999.0
+	p.invuln = 0.0   # иначе мигает (неуязвимость после появления)
+	_clear_enemies()
+	var L: OfficeLevel = game.L
+	var v: Dictionary = L.vents[0]
+	for c in L.vents:   # самая светлая пара
+		if minf(L.visibility_at(c.a.stand.x, c.a.stand.z), L.visibility_at(c.b.stand.x, c.b.stand.z)) > minf(L.visibility_at(v.a.stand.x, v.a.stand.z), L.visibility_at(v.b.stand.x, v.b.stand.z)):
+			v = c
+	p.position = Vector3(v.a.stand.x, 0, v.a.stand.z) + v.a.normal * 0.2
+	p.angle = atan2(-v.a.normal.x, -v.a.normal.z)
+	p.rotation.y = p.angle
+	game.cam_yaw = atan2(v.a.normal.x, v.a.normal.z)
+	game.cam_dist = 7.0
+	game.cam_pos = p.position
+	await _frames(20)
+	game._add_enemy("zombie", p.position + v.a.normal * 4.5, atan2(-v.a.normal.x, -v.a.normal.z), false)
+	var z: Enemy = game.enemies[0]
+	z.foe = p
+	z.alert()
+	var shots: Array = []
+	var look := func(tag: String, frames: int) -> void:
+		for _w in frames:
+			if game.state == "pause": game.state = "play"
+			await _frames(1)
+		shots.append(_grab())
+		game.get_viewport().get_texture().get_image().save_png("%s/pose_vent_%s.png" % [dir, tag])
+	p.invuln = 0.0
+	await look.call("grate", 14)
+	game.ctx_held = true
+	await _frames(2)
+	game.ctx_held = false
+	await look.call("in", 8)
+	for k in 4:
+		await look.call("crawl%d" % k, 25)
+	game.cam_yaw = atan2(v.b.normal.x, v.b.normal.z)
+	while not game.vent.is_empty():
+		await _frames(1)
+	await look.call("out", 15)
+	await look.call("lost", 40)
+	_sheet(dir, "vent", shots)
+	print("[vent] труба %.1f м, зомби %s" % [v.len, Enemy.S.keys()[z.state]])
+	game.get_tree().quit()

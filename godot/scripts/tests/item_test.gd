@@ -102,6 +102,7 @@ func run(g: Node) -> void:
 	ok = await _witness_test() and ok
 	ok = await _escape_test() and ok
 	ok = await _reward_test() and ok
+	ok = await _vent_test() and ok
 	print("[itemtest] ИТОГ: ", "OK" if ok else "ЕСТЬ ПРОБЛЕМЫ")
 	game.get_tree().quit()
 
@@ -1823,4 +1824,87 @@ func _reward_test() -> bool:
 	var ok: bool = not counts.has("bottle") and counts.has("alarm") and counts.has("brick")
 	print("[itemtest] %-14s %-18s 3000 наград: бутылок %d, будильников %d, кирпичей %d" % ["reward_0.20.2", "верно" if ok else "НЕВЕРНО",
 		counts.get("bottle", 0), counts.get("alarm", 0), counts.get("brick", 0)])
+	return ok
+
+
+## 0.21: больше выходов (тупиков минимум вдвое меньше, чем дал бы старый генератор); вентиляция: на этаже одна пара
+## решёток, перед ними проход; без тревоги — нельзя; залез — пропал, гнавшийся потерял, урона нет, вылез у другой
+## решётки; второй раз — нельзя.
+func _vent_test() -> bool:
+	var res := {}
+	var before := 0
+	var after := 0
+	var rooms_n := 0
+	var vmin := 99
+	var stand_ok := true
+	for n in [1, 3, 6, 9, 12, 16, 22, 27]:
+		for s in 3:
+			var L := OfficeLevel.generate(n, 1000 + n * 31 + s)
+			before += L.dead_before
+			after += L.dead_ends()
+			rooms_n += L.rooms.filter(func(r): return not r.corridor).size()
+			vmin = mini(vmin, L.vents.size())
+			for v in L.vents:
+				for e in [v.a, v.b]:
+					if not L.walkable(floori(e.stand.x), floori(e.stand.z)): stand_ok = false
+	res["тупиков: было бы %d, стало %d (комнат %d)" % [before, after, rooms_n]] = after * 2 <= before
+	res["вентиляция: на этаже одна пара (мин %d), перед решёткой проход" % vmin] = vmin == 1 and stand_ok
+	# без тревоги — нельзя; залезть, когда гонится зомби
+	game._load_floor(6, false)
+	await _frames(2)
+	var p: Player = game.player
+	var L2: OfficeLevel = game.L
+	_clear()
+	p.dead = false
+	p.invuln = 0.0
+	p.hp = 100.0
+	p.crouch = false
+	game.autotest = false
+	game.state = "play"
+	var v: Dictionary = L2.vents[0]
+	p.position = Vector3(v.a.stand.x, 0, v.a.stand.z)
+	await _frames(2)
+	game.ctx_held = true
+	await _frames(2)
+	game.ctx_held = false
+	await _frames(2)
+	res["без тревоги — «ВЕНТ. ✕», не залез"] = game.vent.is_empty() and not v.used and p.visible
+	game._add_enemy("zombie", p.position + Vector3(v.a.normal.x, 0, v.a.normal.z) * 2.0, 0.0, false)
+	var z: Enemy = game.enemies[-1]
+	z.angle = z.angle_to_point(p.px(), p.pz())
+	z.rotation.y = z.angle
+	z.foe = p
+	z.alert()
+	await _frames(3)
+	var chased := z.is_hostile()
+	game.ctx_held = true
+	await _frames(2)
+	game.ctx_held = false
+	res["гнался (%s) — залез: герой пропал" % chased] = chased and not game.vent.is_empty() and not p.visible
+	var hp0 := p.hp
+	var lost := false
+	var t := 0
+	while not game.vent.is_empty() and t < 300:
+		await _frames(1)
+		t += 1
+		if not z.sees: lost = true
+	res["гнавшийся потерял, урона нет (hp %d)" % p.hp] = lost and p.hp >= hp0
+	var out := Vector2(p.px() - v.b.stand.x, p.pz() - v.b.stand.z).length() < 0.3
+	res["вылез у другой решётки (%.1f с)" % (t / 30.0)] = out and p.visible and not p.frozen
+	await _frames(10)
+	z.position = p.position + Vector3(v.b.normal.x, 0, v.b.normal.z) * 2.0   # снова гонится — второй раз нельзя
+	z.foe = p
+	z.alert()
+	await _frames(3)
+	game.ctx_held = true
+	await _frames(2)
+	game.ctx_held = false
+	res["второй раз нельзя (кнопки нет)"] = game.vent.is_empty() and game.ctx.get("kind", "") != "vent"
+	_clear()
+	game.state = "intro"
+	var ok := true
+	for k in res:
+		if not res[k]:
+			ok = false
+	print("[itemtest] %-14s %-18s %s" % ["vent_0.21", "верно" if ok else "НЕВЕРНО", res])
 	return ok

@@ -141,7 +141,7 @@ func _foe() -> Actor:
 
 ## Кого высматриваем: игрока и врагов другой фракции поблизости.
 func _candidates() -> Array:
-	var out: Array = [game.player] if game.arrive_grace <= 0.0 else []   # 0.20.3: только приехал — не замечают
+	var out: Array = [game.player] if not game.hero_hidden() else []   # 0.20.3/0.21: только приехал или в вентиляции — не замечают
 	for e: Enemy in game.enemies:
 		if e.faction != faction and not e.is_dead() and absf(e.px() - px()) < 16.0 and absf(e.pz() - pz()) < 16.0:
 			out.append(e)
@@ -242,6 +242,8 @@ static func crouched(a: Actor) -> bool:
 ## не виден вовсе (только вплотную, ≤ 1 м); крадущийся вприсядку по открытому месту — только ближе CROUCH_SEE.
 ## Внимательность (attn) меняет дальность ±15%; цель с краю поля зрения видна хуже, чем по центру.
 func _see_factor(a: Actor) -> float:
+	if a is Player and game.hero_hidden():
+		return 0.0   # 0.21: в вентиляции / только приехал
 	if not alive(a):
 		return 0.0
 	var crouch := crouched(a)
@@ -332,7 +334,7 @@ func _perceive(dt: float) -> void:
 		# 0.13: герой замер вприсядку на ОТКРЫТОМ месте в поле зрения до ~8 м — не тревога,
 		# но «что-то показалось»: подозрение растёт медленно, «?», зомби идёт проверить ТО место (не следит за героем);
 		# вблизи (CROUCH_STILL_SEE) — уже тревога обычным путём; ушёл тихо — на месте начнёт поиск.
-		var g := _glimpse(game.player) if faction == "zombie" and game.arrive_grace <= 0.0 else 0.0
+		var g := _glimpse(game.player) if faction == "zombie" and not game.hero_hidden() else 0.0
 		if g > 0.0:
 			susp = minf(0.95, susp + dt * (0.25 + 1.5 * g) * T.alertness * attn)
 			if susp > 0.12 and icon == "":

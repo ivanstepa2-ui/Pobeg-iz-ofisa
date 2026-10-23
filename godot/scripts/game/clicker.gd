@@ -47,6 +47,8 @@ func is_hostile() -> bool:
 
 
 func _see_factor(a: Actor) -> float:
+	if a is Player and game.hero_hidden():
+		return 0.0
 	if not alive(a):
 		return 0.0
 	return 1.0 if dist_to(a) < 1.0 else 0.0

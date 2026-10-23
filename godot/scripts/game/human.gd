@@ -166,6 +166,8 @@ func beam_fov() -> float:
 # ================================================================ восприятие
 ## Видим только в луче фонарика (и вплотную — чуем). Темнота не спасает в луче.
 func _see_factor(a: Actor) -> float:
+	if a is Player and game.hero_hidden():
+		return 0.0
 	if not alive(a) or is_down():
 		return 0.0
 	var crouch := a is Player and (a as Player).crouch
@@ -407,7 +409,7 @@ func weapon_stowed() -> bool:
 ## Спокойных зомби отряд зачистки не «пугается» — их выслеживают и режут со спины (_hunt_scan).
 func _candidates() -> Array:
 	# 0.15: лояльные офисники героя не высматривают
-	var out: Array = [game.player] if is_foe(game.player) and game.arrive_grace <= 0.0 else []
+	var out: Array = [game.player] if is_foe(game.player) and not game.hero_hidden() else []
 	for e: Enemy in game.enemies:
 		if e.faction == faction or e.is_dead() or e == stalk:
 			continue

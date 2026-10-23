@@ -68,6 +68,7 @@ func _reset_npc_stats() -> void:
 		"friendly_hits": 0,   # 0.12.1: бандит попал по своему
 		"zombie_glimpses": 0,
 		"bandit_vaults": 0,
+		"vents_used": 0, "vent_escapes": 0,   # 0.21: залез в вентиляцию / залез, когда за ним гнались
 		# 0.15: офисники
 		"office_spawned": 0, "office_hostile": 0, "faction_war_t": -1.0,
 		"office_by_hero": 0, "office_by_zombies": 0, "office_by_bandits": 0, "bandits_by_office": 0,
@@ -98,6 +99,10 @@ var elites: Array = []
 var beaten := 0                     # 0.19: сколько раз игра пройдена (save)
 var esc_t := -1.0                  # 0.20: до следующей волны с пожарных лестниц (-1 — ещё не началось)
 var esc_nodes: Array = []          # 0.20: люки (квады в стене)
+var vent := {}                     # 0.21: герой ползёт по вентиляции {from, to, t, dur}; пусто — нет
+var vent_release := false          # после входа/выхода — отпусти кнопку, иначе сразу полезет обратно
+var vent_cam: Node3D = null        # точка, за которой камера едет вдоль трубы
+var vent_snd := 0.0
 var hatch_hold := 0.0              # 0.20: сколько держим «ЗАКРЫТЬ» у люка
 var hatch_noise := 0.0
 var battle_phase := ""        # 0.18: поле битвы — "calm" (ещё не встретились) / "fight" / "after" (победители)
@@ -206,6 +211,8 @@ func _ready() -> void:
 			pt.run_08(self, args[args.find("--posetest") + 1])
 		elif "--readme" in args:
 			pt.run_readme(self, args[args.find("--posetest") + 1])
+		elif "--vent" in args:
+			pt.run_vent(self, args[args.find("--posetest") + 1])
 		elif "--escape" in args:
 			pt.run_escape(self, args[args.find("--posetest") + 1])
 		elif "--witness" in args:
@@ -434,6 +441,10 @@ func _load_floor(n: int, demo: bool, kind: String = "") -> void:
 	esc_t = -1.0
 	esc_nodes.clear()
 	hatch_hold = 0.0
+	if vent_cam != null and cam_target == vent_cam:
+		cam_target = null
+	vent = {}
+	vent_cam = null
 	if env != null:
 		env.background_color = Color(0.03, 0.035, 0.045)   # крыша меняет небо — обычным этажам вернуть
 		env.fog_light_color = Color(0.03, 0.035, 0.045)
@@ -473,6 +484,7 @@ func _load_floor(n: int, demo: bool, kind: String = "") -> void:
 		_spawn_enemies(n)
 	_build_fires()
 	_build_escapes()
+	_build_vents()
 	password.clear()
 	for i in 5:
 		password.append(rng.randi_range(0, 9))
@@ -760,6 +772,7 @@ func _update_world(dt: float, with_player: bool) -> void:
 func _update_play(dt: float) -> void:
 	stats.time = float(stats.get("time", 0.0)) + dt
 	arrive_grace = maxf(0.0, arrive_grace - dt)
+	_update_vent(dt)
 	var mv := _read_move()
 	if autotest:
 		mv = _autopilot(dt)
@@ -896,7 +909,7 @@ func shake(amount: float) -> void:
 func emit_noise(pos: Vector3, r: float, kind: String, ring: bool = false, extra: Vector3 = Vector3.ZERO, source: Node = null) -> void:
 	noise_from_player = source == null   # без источника шумят только герой и его броски
 	for e: Enemy in enemies:
-		if e != source and not (noise_from_player and arrive_grace > 0.0):
+		if e != source and not (noise_from_player and hero_hidden()):
 			e.hear(pos, r, kind, extra)
 	noise_from_player = false
 	match kind:
@@ -960,9 +973,30 @@ func _update_context(dt: float) -> void:
 		for es in L.escapes:
 			if not es.locked and pp.distance_to(Vector2(es.stand.x, es.stand.z)) < 1.3:
 				ctx = {"kind": "hatch", "esc": es}
+	# 0.21: у решётки вентиляции — «ВЕНТ.» (нажать): залез — вылез у другой решётки. Один раз за этаж и только
+	# в тревогу (за героем гонятся); без тревоги — «ВЕНТ. ✕» и подсказка.
+	if ctx.is_empty() and vent.is_empty():
+		for v in L.vents:
+			if v.used:
+				continue
+			for k in ["a", "b"]:
+				var e: Dictionary = v[k]
+				if pp.distance_to(Vector2(e.stand.x, e.stand.z)) < 1.0:
+					ctx = {"kind": "vent", "v": v, "from": e, "to": v["b" if k == "a" else "a"], "ok": any_hostile()}
 	var st: Vector3 = L.exit_elev.stand
 	if ctx.is_empty() and pp.distance_to(Vector2(st.x, st.z)) < 1.4:
 		ctx = {"kind": "elevator"}
+	var vpress := ctx_held or Input.is_key_pressed(KEY_E)   # бот вентиляцией не пользуется
+	if not vpress:
+		vent_release = false
+	if ctx.get("kind", "") == "vent" and vpress and not vent_release and not player.frozen:
+		vent_release = true
+		if ctx.ok:
+			ctx.v.used = true
+			_enter_vent(ctx.from, ctx.to, ctx.v.len)
+			return
+		sfx.play("deny")
+		hud.toast("Вентиляция — на крайний случай: залезть можно, только когда за тобой гонятся (один раз).", Color(0.45, 0.85, 1.0), 3.0)
 	var held := ctx_held or Input.is_key_pressed(KEY_E) or (autotest and bot_hold and not ctx.is_empty())
 	if ctx.get("kind", "") == "hack" and held and not player.dead:
 		var pc: Dictionary = ctx.pc
@@ -1961,6 +1995,87 @@ func _lock_hatch(es: Dictionary) -> void:
 	hud.toast("Люк заколочен." + (" Есть ещё одна лестница." if left > 0 else " Лестниц больше нет."), Color(0.6, 1.0, 0.6), 3.0)
 	if autotest:
 		print("[autotest] люк заблокирован")
+
+
+## 0.21: герой не виден и не слышен врагам — только приехал на этаж или ползёт по вентиляции.
+func hero_hidden() -> bool:
+	return arrive_grace > 0.0 or not vent.is_empty()
+
+
+## Залез в решётку: герой пропал (не виден, не слышен, урона нет), камера едет вдоль трубы к другой решётке.
+## Гнавшиеся теряют его у входа и обыскивают там. Лязг решётки слышно в 2 м.
+func _enter_vent(from: Dictionary, to: Dictionary, ln: float) -> void:
+	emit_noise(player.position, 2.0, "step", true)
+	sfx.play("hit", 0.25)
+	if any_hostile():
+		npc_stats.vent_escapes += 1
+	npc_stats.vents_used += 1
+	vent = {"from": from, "to": to, "t": 0.0, "dur": clampf(ln / 3.0, 2.0, 6.0)}
+	vent_release = true
+	vent_snd = 0.0
+	player.frozen = true
+	player.visible = false
+	player.lock = null
+	player.hacking = false
+	vent_cam = Node3D.new()
+	level_root.add_child(vent_cam)
+	vent_cam.position = player.position
+	cam_target = vent_cam
+	if autotest:
+		print("[autotest] залез в вентиляцию")
+
+
+func _update_vent(dt: float) -> void:
+	if vent.is_empty():
+		return
+	vent.t += dt
+	var k := smoothstep(0.0, 1.0, minf(1.0, vent.t / vent.dur))
+	var a: Vector3 = vent.from.stand
+	var b: Vector3 = vent.to.stand
+	vent_cam.position = a.lerp(b, k)
+	vent_snd -= dt
+	if vent_snd <= 0.0:
+		vent_snd = 0.45
+		sfx.play("step", 0.12, 0.2)   # глухое шуршание в трубе — врагам не слышно
+	if vent.t >= vent.dur:
+		_exit_vent()
+
+
+func _exit_vent() -> void:
+	var to: Dictionary = vent.to
+	vent = {}
+	player.position = Vector3(to.stand.x, 0, to.stand.z)
+	player.angle = atan2(to.normal.x, to.normal.z)
+	player.rotation.y = player.angle
+	player.crouch = true
+	player.visible = true
+	player.frozen = false
+	vent_release = true
+	if cam_target == vent_cam:
+		cam_target = null
+	vent_cam.queue_free()
+	vent_cam = null
+	emit_noise(player.position, 2.0, "step", true)
+	sfx.play("hit", 0.25)
+
+
+## Решётки вентиляции — у пола в стене (без освещения, чтобы было видно и в тёмной комнате).
+func _build_vents() -> void:
+	for v in L.vents:
+		for e in [v.a, v.b]:
+			var q := MeshInstance3D.new()
+			var qm := QuadMesh.new()
+			qm.size = Vector2(0.8, 0.5)
+			q.mesh = qm
+			level_root.add_child(q)
+			q.position = e.plane + e.normal * 0.02 + Vector3(0, 0.32, 0)
+			q.rotation.y = atan2(e.normal.x, e.normal.z)
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.albedo_texture = OfficeTex.get_tex("vent")
+			m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+			m.albedo_color = Color(0.8, 0.8, 0.8)
+			q.material_override = m
 
 
 ## Люки — квады в проёме внешней стены (без освещения, чтобы было видно и в тёмной комнате).
